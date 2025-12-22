@@ -18,11 +18,12 @@ import argparse
 parser = argparse.ArgumentParser(description="VLM Inference")
 parser.add_argument("--process", type=str, default="celeste.exe", help="Game to play")
 parser.add_argument("--allow-menu", action="store_true", help="Allow menu actions (Disabled by default)")
+parser.add_argument("--host", type=str, default="localhost", help="Host for model server")
 parser.add_argument("--port", type=int, default=5555, help="Port for model server")
 
 args = parser.parse_args()
 
-policy = ModelClient(port=args.port)
+policy = ModelClient(host=args.host, port=args.port)
 policy.reset()
 policy_info = policy.info()
 action_downsample_ratio = policy_info["action_downsample_ratio"]
