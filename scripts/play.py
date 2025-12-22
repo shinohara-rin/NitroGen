@@ -23,6 +23,8 @@ parser.add_argument("--port", type=int, default=5555, help="Port for model serve
 
 args = parser.parse_args()
 
+PROFILE = os.environ.get("NITROGEN_PROFILE", "").strip().lower() in {"1", "true", "yes", "y"}
+
 policy = ModelClient(host=args.host, port=args.port)
 policy.reset()
 policy_info = policy.info()
@@ -165,10 +167,14 @@ with VideoRecorder(str(PATH_MP4_DEBUG), fps=60, crf=32, preset="medium") as debu
     with VideoRecorder(str(PATH_MP4_CLEAN), fps=60, crf=28, preset="medium") as clean_recorder:
         try:
             while True:
+                t_loop0 = time.time()
                 obs = preprocess_img(obs)
+                t_pre = time.time()
                 obs.save(PATH_DEBUG / f"{step_count:05d}.png")
+                t_save = time.time()
 
                 pred = policy.predict(obs)
+                t_pred = time.time()
 
                 j_left, j_right, buttons = pred["j_left"], pred["j_right"], pred["buttons"]
 
@@ -203,6 +209,8 @@ with VideoRecorder(str(PATH_MP4_DEBUG), fps=60, crf=32, preset="medium") as debu
 
                 print(f"Executing {len(env_actions)} actions, each action will be repeated {action_downsample_ratio} times")
 
+                t_act0 = time.time()
+
                 for i, a in enumerate(env_actions):
                     if NO_MENU:
                         if a["START"]:
@@ -228,6 +236,8 @@ with VideoRecorder(str(PATH_MP4_DEBUG), fps=60, crf=32, preset="medium") as debu
                         debug_recorder.add_frame(debug_viz)
                         clean_recorder.add_frame(clean_viz)
 
+                t_act1 = time.time()
+
                 # Append env_actions dictionnary to JSONL file
                 with open(PATH_ACTIONS, "a") as f:
                     for i, a in enumerate(env_actions):
@@ -242,6 +252,18 @@ with VideoRecorder(str(PATH_MP4_DEBUG), fps=60, crf=32, preset="medium") as debu
 
 
                 step_count += 1
+
+                if PROFILE and step_count % 5 == 0:
+                    loop_dt = time.time() - t_loop0
+                    pre_dt = t_pre - t_loop0
+                    save_dt = t_save - t_pre
+                    pred_dt = t_pred - t_save
+                    act_dt = t_act1 - t_act0
+                    print(
+                        "[profile] "
+                        f"loop={loop_dt:.3f}s pre={pre_dt:.3f}s save_png={save_dt:.3f}s "
+                        f"predict={pred_dt:.3f}s actions+render+encode={act_dt:.3f}s"
+                    )
         finally:
             env.unpause()
             env.close()
