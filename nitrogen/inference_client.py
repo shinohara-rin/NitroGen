@@ -109,8 +109,13 @@ class ModelClient:
                 f"Server error (type='predict', server={self.host}:{self.port}): "
                 f"{response.get('message', 'Unknown error')}. Full response={response!r}"
             )
-        
-        return response["pred"]
+
+        pred = response["pred"]
+        if isinstance(pred, dict):
+            for k, v in list(pred.items()):
+                if isinstance(v, list):
+                    pred[k] = np.array(v)
+        return pred
     
     def reset(self):
         """Reset the server's session (clear buffers)."""

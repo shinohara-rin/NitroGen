@@ -33,7 +33,7 @@ app = modal.App("nitrogen-inference", image=image)
 volume = modal.Volume.from_name("nitrogen-vol", create_if_missing=True)
 
 @app.cls(
-    gpu="A10",  # Or A100/A10G depending on availability/needs. H100 is fastest.
+    gpu="A100",  # Or A100/A10G depending on availability/needs. H100 is fastest.
     timeout=600, 
     volumes={"/data": volume}, 
 )
