@@ -348,19 +348,70 @@ class PyautoguiScreenshotBackend:
 
 class DxcamScreenshotBackend:
     def __init__(self, bbox):
+        import ctypes
         import dxcam
-        self.camera = dxcam.create()
         self.bbox = bbox
         self.last_screenshot = None
+        self.verbose = os.environ.get("NITROGEN_DEBUG", "").strip().lower() in {"1", "true", "yes", "y"}
+
+        class _RECT(ctypes.Structure):
+            _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long), ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+        monitors = []
+
+        def _callback(hMonitor, hdcMonitor, lprcMonitor, dwData):
+            r = lprcMonitor.contents
+            monitors.append((int(r.left), int(r.top), int(r.right), int(r.bottom)))
+            return 1
+
+        MONITORENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(_RECT), ctypes.c_void_p)
+        ctypes.windll.user32.EnumDisplayMonitors(0, 0, MONITORENUMPROC(_callback), 0)
+
+        l, t, r, b = self.bbox
+        cx = int((l + r) / 2)
+        cy = int((t + b) / 2)
+
+        output_idx = 0
+        origin_left = 0
+        origin_top = 0
+        for i, (ml, mt, mr, mb) in enumerate(monitors):
+            if ml <= cx < mr and mt <= cy < mb:
+                output_idx = i
+                origin_left = ml
+                origin_top = mt
+                break
+
+        self.output_idx = output_idx
+        self.origin = (origin_left, origin_top)
+        self.region = (l - origin_left, t - origin_top, r - origin_left, b - origin_top)
+
+        if self.verbose:
+            try:
+                print(f"DXCAM outputs:\n{dxcam.output_info()}")
+            except Exception:
+                pass
+            print(f"DXCAM monitors={monitors}")
+            print(f"DXCAM selected output_idx={self.output_idx} origin={self.origin} region={self.region} bbox_global={self.bbox}")
+
+        self.camera = dxcam.create(output_idx=self.output_idx)
 
     def screenshot(self):
-        screenshot = self.camera.grab(region=self.bbox)
+        try:
+            screenshot = self.camera.grab(region=self.region)
+        except ValueError as e:
+            if self.verbose:
+                print(f"DXCAM invalid region for output_idx={self.output_idx}: {e}")
+                print("Falling back to pyautogui screenshot backend")
+            l, t, r, b = self.bbox
+            fallback = PyautoguiScreenshotBackend((l, t, r - l, b - t))
+            return fallback.screenshot()
         if screenshot is None:
             print("DXCAM failed to capture frame, trying to use the latest screenshot")
             if self.last_screenshot is not None:
                 return self.last_screenshot
             else:
-                return Image.new("RGB", (self.bbox[2], self.bbox[3]), (0, 0, 0))
+                l, t, r, b = self.bbox
+                return Image.new("RGB", (r - l, b - t), (0, 0, 0))
         screenshot = Image.fromarray(screenshot)
         self.last_screenshot = screenshot
         return screenshot
@@ -464,7 +515,8 @@ class GamepadEnv(Env):
 
         self.game_window.activate()
         l, t, r, b = self.game_window.left, self.game_window.top, self.game_window.right, self.game_window.bottom
-        self.bbox = (l, t, r-l, b-t)
+        self.bbox = (l, t, r, b)
+        self.bbox_wh = (l, t, r - l, b - t)
 
         # Initialize speedhack client if using DLL injection
         self.speedhack_client = xsh.Client(process_id=self.game_pid, arch=self.game_arch)
@@ -473,7 +525,7 @@ class GamepadEnv(Env):
         if screenshot_backend == "dxcam":
             self.screenshot_backend = DxcamScreenshotBackend(self.bbox)
         elif screenshot_backend == "pyautogui":
-            self.screenshot_backend = PyautoguiScreenshotBackend(self.bbox)
+            self.screenshot_backend = PyautoguiScreenshotBackend(self.bbox_wh)
         else:
             raise ValueError("Unsupported screenshot backend. Use 'dxcam' or 'pyautogui'.")
 

@@ -58,6 +58,20 @@ def preprocess_img(main_image):
     final_image = cv2.resize(main_cv, (256, 256), interpolation=cv2.INTER_AREA)
     return Image.fromarray(cv2.cvtColor(final_image, cv2.COLOR_BGR2RGB))
 
+def letterbox_bgr(img_bgr: np.ndarray, target_w: int, target_h: int) -> np.ndarray:
+    h, w = img_bgr.shape[:2]
+    if h == 0 or w == 0:
+        return np.zeros((target_h, target_w, 3), dtype=np.uint8)
+    scale = min(target_w / w, target_h / h)
+    new_w = max(1, int(round(w * scale)))
+    new_h = max(1, int(round(h * scale)))
+    resized = cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    pad_left = (target_w - new_w) // 2
+    pad_right = target_w - new_w - pad_left
+    pad_top = (target_h - new_h) // 2
+    pad_bottom = target_h - new_h - pad_top
+    return cv2.copyMakeBorder(resized, pad_top, pad_bottom, pad_left, pad_right, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+
 zero_action = OrderedDict(
         [ 
             ("WEST", 0),
@@ -202,9 +216,9 @@ with VideoRecorder(str(PATH_MP4_DEBUG), fps=60, crf=32, preset="medium") as debu
 
                         # resize obs to 720p
                         obs_viz = np.array(obs).copy()
-                        clean_viz = cv2.resize(obs_viz, (1920, 1080), interpolation=cv2.INTER_AREA)
+                        clean_viz = letterbox_bgr(obs_viz, 1920, 1080)
                         debug_viz = create_viz(
-                            cv2.resize(obs_viz, (1280, 720), interpolation=cv2.INTER_AREA), # 720p
+                            letterbox_bgr(obs_viz, 1280, 720),
                             i,
                             j_left,
                             j_right,
