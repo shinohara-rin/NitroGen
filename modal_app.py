@@ -33,7 +33,7 @@ app = modal.App("nitrogen-inference", image=image)
 volume = modal.Volume.from_name("nitrogen-vol", create_if_missing=True)
 
 @app.cls(
-    gpu="A100",  # Or A100/A10G depending on availability/needs. H100 is fastest.
+    gpu="A10",  # Or A100/A10G depending on availability/needs. H100 is fastest.
     timeout=600, 
     volumes={"/data": volume}, 
 )
@@ -116,6 +116,12 @@ class Model:
             else:
                 print(f"[modal] predict image type={type(image)}")
             out = self.session.predict(image)
+            # Important: return JSON/pickle-friendly plain types to avoid numpy version skew
+            # between Modal container and local machine.
+            if isinstance(out, dict):
+                for k, v in list(out.items()):
+                    if isinstance(v, np.ndarray):
+                        out[k] = v.tolist()
             print(f"[modal] predict complete. latency={time.time() - t0:.3f}s")
             return out
         except Exception as e:

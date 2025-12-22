@@ -1,4 +1,5 @@
-import time
+import ctypes
+import os
 import platform
 
 import pyautogui
@@ -393,7 +394,17 @@ class DxcamScreenshotBackend:
             print(f"DXCAM monitors={monitors}")
             print(f"DXCAM selected output_idx={self.output_idx} origin={self.origin} region={self.region} bbox_global={self.bbox}")
 
-        self.camera = dxcam.create(output_idx=self.output_idx)
+        try:
+            self.camera = dxcam.create(output_idx=self.output_idx)
+        except Exception as e:
+            if self.verbose:
+                print(f"DXCAM create(output_idx={self.output_idx}) failed: {e}")
+                print("Falling back to default dxcam.create()")
+            self.output_idx = 0
+            self.origin = (0, 0)
+            l, t, r, b = self.bbox
+            self.region = (l, t, r, b)
+            self.camera = dxcam.create()
 
     def screenshot(self):
         try:

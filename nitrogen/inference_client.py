@@ -56,6 +56,17 @@ class ModelClient:
                         "For Modal inference, run scripts/serve_modal.py (and ensure modal_app.py is deployed). "
                         "If this is a Modal cold start, increase timeout_ms or retries."
                     ) from e
+                # REQ sockets must strictly alternate send/recv. If recv timed out,
+                # we must recreate the socket before sending again.
+                try:
+                    self.socket.close(0)
+                except Exception:
+                    pass
+                self.socket = self.context.socket(zmq.REQ)
+                self.socket.connect(f"tcp://{self.host}:{self.port}")
+                self.socket.setsockopt(zmq.RCVTIMEO, self.timeout_ms)
+                self.socket.setsockopt(zmq.SNDTIMEO, self.timeout_ms)
+                self.socket.setsockopt(zmq.LINGER, 0)
                 time.sleep(0.25)
             except Exception:
                 # ZMQ REQ sockets are strict (send/recv alternation). If something failed mid-flight,
@@ -94,7 +105,10 @@ class ModelClient:
         response = self._request(request)
         
         if response["status"] != "ok":
-            raise RuntimeError(f"Server error: {response.get('message', 'Unknown error')}")
+            raise RuntimeError(
+                f"Server error (type='predict', server={self.host}:{self.port}): "
+                f"{response.get('message', 'Unknown error')}. Full response={response!r}"
+            )
         
         return response["pred"]
     
@@ -105,7 +119,10 @@ class ModelClient:
         response = self._request(request)
         
         if response["status"] != "ok":
-            raise RuntimeError(f"Server error: {response.get('message', 'Unknown error')}")
+            raise RuntimeError(
+                f"Server error (type='reset', server={self.host}:{self.port}): "
+                f"{response.get('message', 'Unknown error')}. Full response={response!r}"
+            )
         
         print("Session reset")
 
@@ -116,7 +133,10 @@ class ModelClient:
         response = self._request(request)
         
         if response["status"] != "ok":
-            raise RuntimeError(f"Server error: {response.get('message', 'Unknown error')}")
+            raise RuntimeError(
+                f"Server error (type='info', server={self.host}:{self.port}): "
+                f"{response.get('message', 'Unknown error')}. Full response={response!r}"
+            )
         
         return response["info"]
 
