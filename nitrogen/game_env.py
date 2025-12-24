@@ -348,7 +348,7 @@ class PyautoguiScreenshotBackend:
         return pyautogui.screenshot(region=self.bbox)
 
 class DxcamScreenshotBackend:
-    def __init__(self, bbox):
+    def __init__(self, bbox, fps=60):
         import ctypes
         import dxcam
         self.bbox = bbox
@@ -396,6 +396,7 @@ class DxcamScreenshotBackend:
 
         try:
             self.camera = dxcam.create(output_idx=self.output_idx)
+            self.camera.start(region=self.region, target_fps=fps, video_mode=True)
         except Exception as e:
             if self.verbose:
                 print(f"DXCAM create(output_idx={self.output_idx}) failed: {e}")
@@ -405,10 +406,11 @@ class DxcamScreenshotBackend:
             l, t, r, b = self.bbox
             self.region = (l, t, r, b)
             self.camera = dxcam.create()
+            self.camera.start(region=self.region, target_fps=fps, video_mode=True)
 
     def screenshot(self):
         try:
-            screenshot = self.camera.grab(region=self.region)
+            screenshot = self.camera.get_latest_frame()
         except ValueError as e:
             if self.verbose:
                 print(f"DXCAM invalid region for output_idx={self.output_idx}: {e}")
@@ -417,7 +419,8 @@ class DxcamScreenshotBackend:
             fallback = PyautoguiScreenshotBackend((l, t, r - l, b - t))
             return fallback.screenshot()
         if screenshot is None:
-            print("DXCAM failed to capture frame, trying to use the latest screenshot")
+            if self.verbose:
+                print("DXCAM failed to capture frame, trying to use the latest screenshot")
             if self.last_screenshot is not None:
                 return self.last_screenshot
             else:
@@ -534,7 +537,7 @@ class GamepadEnv(Env):
 
         # Get the screenshot backend
         if screenshot_backend == "dxcam":
-            self.screenshot_backend = DxcamScreenshotBackend(self.bbox)
+            self.screenshot_backend = DxcamScreenshotBackend(self.bbox, self.env_fps)
         elif screenshot_backend == "pyautogui":
             self.screenshot_backend = PyautoguiScreenshotBackend(self.bbox_wh)
         else:
