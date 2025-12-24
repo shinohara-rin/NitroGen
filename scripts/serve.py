@@ -11,9 +11,16 @@ if __name__ == "__main__":
     parser.add_argument("--old-layout", action="store_true", help="Use old layout")
     parser.add_argument("--cfg", type=float, default=1.0, help="CFG scale")
     parser.add_argument("--ctx", type=int, default=1, help="Context length")
+    parser.add_argument("--device", type=str, default="auto", help="Device to run on: auto|cuda|mps|cpu")
     args = parser.parse_args()
 
-    session = InferenceSession.from_ckpt(args.ckpt, old_layout=args.old_layout, cfg_scale=args.cfg, context_length=args.ctx)
+    session = InferenceSession.from_ckpt(
+        args.ckpt,
+        old_layout=args.old_layout,
+        cfg_scale=args.cfg,
+        context_length=args.ctx,
+        device=args.device,
+    )
 
     # Setup ZeroMQ
     context = zmq.Context()

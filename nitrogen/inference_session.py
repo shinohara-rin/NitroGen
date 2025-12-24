@@ -1,6 +1,7 @@
 import time
 import json
 from collections import deque
+import contextlib
 
 import torch
 import numpy as np
@@ -10,6 +11,34 @@ from nitrogen.flow_matching_transformer.nitrogen import NitroGen, NitroGen_Confi
 from nitrogen.mm_tokenizers import NitrogenTokenizerConfig, NitrogenTokenizer, Tokenizer
 from nitrogen.cfg import CkptConfig
 from nitrogen.shared import PATH_REPO
+
+
+def _resolve_device(device: str | None) -> torch.device:
+    if device is None:
+        device = "auto"
+    device = str(device).strip().lower()
+    if device == "auto":
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return torch.device("mps")
+        return torch.device("cpu")
+    if device in {"cuda", "cpu", "mps"}:
+        if device == "cuda" and not torch.cuda.is_available():
+            raise RuntimeError("device='cuda' requested but torch.cuda.is_available() is False")
+        if device == "mps" and not (hasattr(torch.backends, "mps") and torch.backends.mps.is_available()):
+            raise RuntimeError("device='mps' requested but torch.backends.mps.is_available() is False")
+        return torch.device(device)
+    raise ValueError(f"Unsupported device: {device!r}. Expected 'auto', 'cuda', 'mps', or 'cpu'.")
+
+
+def _autocast_ctx(device: torch.device):
+    device_type = device.type
+    if device_type == "cuda":
+        return torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+    if device_type == "mps":
+        return torch.autocast(device_type="mps", dtype=torch.float16)
+    return contextlib.nullcontext()
 
 def summarize_parameters(module, name='model', depth=0, max_depth=3):
     """
@@ -38,7 +67,7 @@ def summarize_parameters(module, name='model', depth=0, max_depth=3):
             summarize_parameters(child_module, child_name, depth + 1, max_depth)
 
 
-def load_model(checkpoint_path: str):
+def load_model(checkpoint_path: str, device: str | None = "auto"):
     """Load model and args from checkpoint."""
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     ckpt_config = CkptConfig.model_validate(checkpoint["ckpt_config"])
@@ -76,7 +105,9 @@ def load_model(checkpoint_path: str):
     model.load_state_dict(checkpoint["model"])
     model.eval()
     tokenizer.eval()
-    model.to("cuda")
+
+    resolved_device = _resolve_device(device)
+    model.to(resolved_device)
 
     return model, tokenizer, img_proc, ckpt_config, game_mapping, action_downsample_ratio
 
@@ -107,6 +138,7 @@ class InferenceSession:
         self.cfg_scale = cfg_scale
         self.action_downsample_ratio = action_downsample_ratio
         self.ckpt_path = ckpt_path
+        self.device = next(iter(self.model.parameters())).device
 
         # Load modality config
         self.modality_config = self.ckpt_config.modality_cfg
@@ -120,9 +152,9 @@ class InferenceSession:
         self.action_buffer = deque(maxlen=self.max_buffer_size)
 
     @classmethod
-    def from_ckpt(cls, checkpoint_path: str, old_layout=False, cfg_scale=1.0, context_length=None):
+    def from_ckpt(cls, checkpoint_path: str, old_layout=False, cfg_scale=1.0, context_length=None, device: str | None = "auto"):
         """Create an InferenceSession from a checkpoint."""
-        model, tokenizer, img_proc, ckpt_config, game_mapping, action_downsample_ratio = load_model(checkpoint_path)
+        model, tokenizer, img_proc, ckpt_config, game_mapping, action_downsample_ratio = load_model(checkpoint_path, device=device)
 
         if game_mapping is not None:
             # Ask user to pick a game from the list
@@ -161,6 +193,7 @@ class InferenceSession:
     def info(self):
         return {
             "ckpt_path": self.ckpt_path,
+            "device": str(self.device),
             "selected_game": self.selected_game,
             "old_layout": self.old_layout,
             "cfg_scale": self.cfg_scale,
@@ -178,7 +211,7 @@ class InferenceSession:
     def predict(self, obs):
         start_time = time.time()
 
-        current_frame = self.img_proc([obs], return_tensors="pt")["pixel_values"]
+        current_frame = self.img_proc([obs], return_tensors="pt")["pixel_values"].to(self.device)
         self.obs_buffer.append(current_frame)
         
         # Prepare model inputs
@@ -227,11 +260,13 @@ class InferenceSession:
 
     def _predict_flowmatching(self, pixel_values, action_tensors):
 
+        pixel_values = pixel_values.to(self.device)
+
         available_frames = len(self.obs_buffer)
         frames = torch.zeros((self.max_buffer_size, *pixel_values.shape[1:]), 
-                            dtype=pixel_values.dtype, device="cuda")
+                            dtype=pixel_values.dtype, device=self.device)
         frames[-available_frames:] = pixel_values
-        dropped_frames = torch.zeros((self.max_buffer_size,), dtype=torch.bool, device="cuda")
+        dropped_frames = torch.zeros((self.max_buffer_size,), dtype=torch.bool, device=self.device)
         dropped_frames[:self.max_buffer_size - available_frames] = True
         
         data_with_history = {
@@ -241,7 +276,7 @@ class InferenceSession:
         }
         tokenized_data_with_history = self.tokenizer.encode(data_with_history)
         
-        frame_mask = torch.ones((self.max_buffer_size,), dtype=torch.bool, device="cuda")
+        frame_mask = torch.ones((self.max_buffer_size,), dtype=torch.bool, device=self.device)
         frame_mask[-1] = False
         data_without_history = {
             "frames": frames,
@@ -250,18 +285,18 @@ class InferenceSession:
         }
         tokenized_data_without_history = self.tokenizer.encode(data_without_history)
         
-        # Convert to CUDA tensors with batch dimension
+        # Convert to tensors with batch dimension
         for tokenized_data in [tokenized_data_with_history, tokenized_data_without_history]:
             for k, v in tokenized_data.items():
                 if isinstance(v, torch.Tensor):
-                    tokenized_data[k] = v.unsqueeze(0).to("cuda")
+                    tokenized_data[k] = v.unsqueeze(0).to(self.device)
                 elif isinstance(v, np.ndarray):
-                    tokenized_data[k] = torch.tensor(v, device="cuda").unsqueeze(0)
+                    tokenized_data[k] = torch.tensor(v, device=self.device).unsqueeze(0)
                 else:
                     tokenized_data[k] = [v]
         
         with torch.inference_mode():
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            with _autocast_ctx(self.device):
                 if self.cfg_scale == 1.0:
                     model_output = self.model.get_action(tokenized_data_with_history, 
                                                         old_layout=self.old_layout)
