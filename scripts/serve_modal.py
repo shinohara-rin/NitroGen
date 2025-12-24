@@ -118,7 +118,7 @@ def main():
                         dt = time.time() - t0
                         response = {
                             "status": "ok",
-                            "pred": result
+                            "pred": _to_builtin(result)
                         }
                         if verbose:
                             keys = list(result.keys()) if isinstance(result, dict) else None
@@ -143,3 +143,14 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def _to_builtin(obj):
+    if isinstance(obj, dict):
+        return {k: _to_builtin(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_builtin(v) for v in obj]
+    tolist = getattr(obj, "tolist", None)
+    if callable(tolist):
+        return _to_builtin(tolist())
+    return obj

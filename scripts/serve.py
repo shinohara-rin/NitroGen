@@ -4,6 +4,17 @@ import pickle
 
 from nitrogen.inference_session import InferenceSession
 
+
+def _to_builtin(obj):
+    if isinstance(obj, dict):
+        return {k: _to_builtin(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_builtin(v) for v in obj]
+    tolist = getattr(obj, "tolist", None)
+    if callable(tolist):
+        return _to_builtin(tolist())
+    return obj
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Model inference server")
     parser.add_argument("ckpt", type=str, help="Path to checkpoint file")
@@ -57,7 +68,7 @@ if __name__ == "__main__":
                     result = session.predict(raw_image)
                     response = {
                         "status": "ok",
-                        "pred": result
+                        "pred": _to_builtin(result)
                     }
                 else:
                     response = {"status": "error", "message": f"Unknown request type: {request['type']}"}
